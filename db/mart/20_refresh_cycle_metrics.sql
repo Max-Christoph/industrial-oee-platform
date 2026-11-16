@@ -55,7 +55,13 @@ BEGIN
                    (array_agg(e.event_category ORDER BY (e.event_state = 'END'), e.event_datetime))[1] AS event_category,
                    (array_agg(e.event_code ORDER BY (e.event_state = 'END'), e.event_datetime)
                         FILTER (WHERE e.event_code IS NOT NULL))[1]             AS event_code,
-                   max(e.cycle_time_s)                                          AS reported_cycle_time_s
+                   max(e.cycle_time_s)                                          AS reported_cycle_time_s,
+                   -- optional produced quantities (validated numbers from the ingest schema;
+                   -- jsonb_typeof guard keeps the job alive on hand-written attributes)
+                   max(CASE WHEN jsonb_typeof(e.attributes -> 'quantity_good') = 'number'
+                            THEN (e.attributes ->> 'quantity_good')::double precision END)  AS quantity_good,
+                   max(CASE WHEN jsonb_typeof(e.attributes -> 'quantity_scrap') = 'number'
+                            THEN (e.attributes ->> 'quantity_scrap')::double precision END) AS quantity_scrap
             FROM core.events e
             JOIN touched t ON t.asset_id = e.asset_id AND t.event_uid = e.event_uid
             WHERE e.event_datetime > v_snapshot - 2 * v_lookback
@@ -89,10 +95,11 @@ BEGIN
         ), upserted AS (
             INSERT INTO mart.event_intervals AS t (
                 asset_id, event_uid, event_category, event_code, start_time, end_time,
-                duration_s, reported_cycle_time_s, stop_class, is_valid, invalid_reason, paired_at)
+                duration_s, reported_cycle_time_s, stop_class, is_valid, invalid_reason, paired_at,
+                quantity_good, quantity_scrap)
             SELECT c.asset_id, c.event_uid, c.event_category, c.event_code, c.start_time, c.end_time,
                    c.duration_s, c.reported_cycle_time_s, c.stop_class, c.invalid_reason IS NULL,
-                   c.invalid_reason, v_snapshot
+                   c.invalid_reason, v_snapshot, c.quantity_good, c.quantity_scrap
             FROM classified c
             ON CONFLICT (asset_id, event_uid, start_time) DO UPDATE
                SET end_time              = EXCLUDED.end_time,
@@ -103,11 +110,15 @@ BEGIN
                    stop_class            = EXCLUDED.stop_class,
                    is_valid              = EXCLUDED.is_valid,
                    invalid_reason        = EXCLUDED.invalid_reason,
-                   paired_at             = EXCLUDED.paired_at
-             WHERE (t.end_time, t.event_category, t.event_code, t.reported_cycle_time_s, t.stop_class, t.is_valid)
+                   paired_at             = EXCLUDED.paired_at,
+                   quantity_good         = EXCLUDED.quantity_good,
+                   quantity_scrap        = EXCLUDED.quantity_scrap
+             WHERE (t.end_time, t.event_category, t.event_code, t.reported_cycle_time_s, t.stop_class, t.is_valid,
+                    t.quantity_good, t.quantity_scrap)
                    IS DISTINCT FROM
                    (EXCLUDED.end_time, EXCLUDED.event_category, EXCLUDED.event_code,
-                    EXCLUDED.reported_cycle_time_s, EXCLUDED.stop_class, EXCLUDED.is_valid)
+                    EXCLUDED.reported_cycle_time_s, EXCLUDED.stop_class, EXCLUDED.is_valid,
+                    EXCLUDED.quantity_good, EXCLUDED.quantity_scrap)
             RETURNING t.asset_id, t.start_time
         )
         INSERT INTO _oee_touched (asset_id, start_time)
@@ -118,7 +129,8 @@ BEGIN
         INSERT INTO mart.cycle_metrics AS m (
             bucket, asset_id, cycle_count, cycle_avg_s, cycle_median_s, cycle_min_s, cycle_max_s,
             cycle_p25_s, cycle_p75_s, cycle_p95_s, rejected_cycle_count,
-            microstop_count, microstop_s, downtime_count, downtime_s, setup_count, setup_s, updated_at)
+            microstop_count, microstop_s, downtime_count, downtime_s, setup_count, setup_s,
+            good_quantity, scrap_quantity, updated_at)
         SELECT b.bucket,
                b.asset_id,
                count(*) FILTER (WHERE i.stop_class = 'CYCLE' AND i.is_valid),
@@ -136,6 +148,10 @@ BEGIN
                coalesce(sum(i.duration_s) FILTER (WHERE i.stop_class = 'DOWNTIME' AND i.is_valid), 0),
                count(*) FILTER (WHERE i.stop_class = 'SETUP' AND i.is_valid),
                coalesce(sum(i.duration_s) FILTER (WHERE i.stop_class = 'SETUP' AND i.is_valid), 0),
+               -- a valid cycle without reported quantities counts as one good unit
+               coalesce(sum(coalesce(i.quantity_good, CASE WHEN i.quantity_scrap IS NULL THEN 1 ELSE 0 END))
+                        FILTER (WHERE i.stop_class = 'CYCLE' AND i.is_valid), 0),
+               coalesce(sum(coalesce(i.quantity_scrap, 0)) FILTER (WHERE i.stop_class = 'CYCLE' AND i.is_valid), 0),
                clock_timestamp()
         FROM (SELECT DISTINCT asset_id, time_bucket(INTERVAL '1 hour', start_time) AS bucket FROM _oee_touched) b
         JOIN mart.event_intervals i
@@ -159,6 +175,8 @@ BEGIN
                downtime_s           = EXCLUDED.downtime_s,
                setup_count          = EXCLUDED.setup_count,
                setup_s              = EXCLUDED.setup_s,
+               good_quantity        = EXCLUDED.good_quantity,
+               scrap_quantity       = EXCLUDED.scrap_quantity,
                updated_at           = EXCLUDED.updated_at;
         GET DIAGNOSTICS v_buckets = ROW_COUNT;
 

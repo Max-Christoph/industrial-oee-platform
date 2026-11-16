@@ -226,3 +226,89 @@ def test_mart_sql_is_idempotent(conn):
     for f in sorted((REPO / "db" / "mart").glob("*.sql")):
         conn.execute(f.read_text(encoding="utf-8"))
         conn.execute(f.read_text(encoding="utf-8"))
+
+
+# ----------------------------------------------------------------------------- OEE (SQL)
+def _oee_scenario(test_dsn, conn, asset="OEE1"):
+    """10 cycles of 30 s (9 without quantities = 1 good each, 1 with 5 good / 2 scrap),
+    one 600 s downtime, one 300 s setup, one 60 s microstop - all in hour BASE."""
+    conn.execute(
+        "INSERT INTO core.assets (asset_id, name, ideal_cycle_time_s) VALUES (%s, 'OEE test', 10) "
+        "ON CONFLICT (asset_id) DO UPDATE SET ideal_cycle_time_s = 10", (asset,))
+    events = []
+    for i in range(10):
+        start = BASE + timedelta(minutes=i)
+        extra = {"quantity_good": 5, "quantity_scrap": 2} if i == 9 else {}
+        events += [ev(f"o{i}", "START", "PROCESS", start, asset),
+                   ev(f"o{i}", "END", "PROCESS", start + timedelta(seconds=30), asset, **extra)]
+    events += pair("o-down", "STANDBY", BASE + timedelta(minutes=15), 600, asset)
+    events += pair("o-setup", "SETUP", BASE + timedelta(minutes=30), 300, asset)
+    events += pair("o-micro", "ERROR", BASE + timedelta(minutes=40), 60, asset)
+    write(test_dsn, events)
+    refresh(conn)
+
+
+def test_oee_hourly_24_7(conn, test_dsn):
+    _oee_scenario(test_dsn, conn)
+    row = conn.execute(
+        "SELECT planned_s, run_s, good_quantity, scrap_quantity, total_quantity, availability, performance, "
+        "quality, oee FROM mart.v_oee_hourly WHERE asset_id = 'OEE1' AND bucket = %s", (BASE,)).fetchone()
+    planned, run, good, scrap, total, a, p, q, oee = row
+    assert (planned, run, good, scrap, total) == (3600, 2700, 14, 2, 16)   # 3600 - 600 - 300
+    assert a == pytest.approx(0.75)
+    assert p == pytest.approx(10 * 16 / 2700)
+    assert q == pytest.approx(14 / 16)
+    assert oee == pytest.approx(0.75 * (10 * 16 / 2700) * (14 / 16))
+
+    day = conn.execute("SELECT availability, quality, oee FROM mart.v_oee_daily WHERE asset_id = 'OEE1'").fetchone()
+    assert day[0] == pytest.approx(a) and day[1] == pytest.approx(q) and day[2] == pytest.approx(oee)
+
+    summary = conn.execute(
+        "SELECT availability, performance, quality, oee FROM mart.oee_summary(%s, %s, ARRAY['OEE1'])",
+        (BASE, BASE + timedelta(hours=1))).fetchone()
+    assert summary == pytest.approx((a, p, q, oee))
+
+
+def test_oee_respects_shift_model(conn, test_dsn):
+    _oee_scenario(test_dsn, conn)
+    start = BASE + timedelta(minutes=30)                      # planned only for the 2nd half of the hour
+    conn.execute(
+        "INSERT INTO core.shift_patterns (asset_id, iso_weekday, start_local, end_local, timezone) "
+        "VALUES ('*', %s, %s, %s, 'UTC')",
+        (start.isoweekday(), start.time(), (start + timedelta(hours=1)).time()))
+    planned, run, a = conn.execute(
+        "SELECT planned_s, run_s, availability FROM mart.v_oee_hourly WHERE asset_id = 'OEE1' AND bucket = %s",
+        (BASE,)).fetchone()
+    assert (planned, run) == (1800, 900) and a == pytest.approx(0.5)
+
+
+def test_oee_summary_all_assets_and_unknown(conn, test_dsn):
+    _oee_scenario(test_dsn, conn)
+    rng = (BASE, BASE + timedelta(hours=1))
+    all_ = conn.execute("SELECT oee FROM mart.oee_summary(%s, %s, ARRAY['All'])", rng).fetchone()[0]
+    one = conn.execute("SELECT oee FROM mart.oee_summary(%s, %s, ARRAY['OEE1'])", rng).fetchone()[0]
+    none = conn.execute("SELECT oee FROM mart.oee_summary(%s, %s, ARRAY['nope'])", rng).fetchone()[0]
+    assert all_ == pytest.approx(one) and none is None
+
+
+def test_non_numeric_quantity_attribute_does_not_break_job(conn, test_dsn):
+    good = ev("q1", "START", "PROCESS", BASE)
+    end = TelemetryEvent.model_validate(
+        {"event_uid": "q1", "asset_id": "M1", "event_state": "END", "event_category": "PROCESS",
+         "event_datetime": BASE + timedelta(seconds=20), "attributes": {"quantity_good": "lots"}},
+        context={"limits": LIMITS})
+    write(test_dsn, [good, end])
+    refresh(conn)
+    assert conn.execute("SELECT count(*) FROM core.error_logs").fetchone()[0] == 0
+    assert conn.execute("SELECT good_quantity FROM mart.cycle_metrics WHERE asset_id='M1'").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("role", ["grafana_reader", "bi_reader", "ai_reader"])
+def test_readers_can_query_oee(conn, test_dsn, role):
+    _oee_scenario(test_dsn, conn)
+    conn.execute(f"SET ROLE {role}")
+    try:
+        assert conn.execute("SELECT count(*) FROM mart.v_oee_hourly").fetchone()[0] >= 1
+        assert conn.execute("SELECT oee FROM mart.oee_summary(now() - interval '1 day', now())").fetchone()[0]
+    finally:
+        conn.execute("RESET ROLE")

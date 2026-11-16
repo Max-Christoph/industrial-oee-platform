@@ -28,6 +28,8 @@ this repository. They override convenience. If a task would violate a rule, stop
   changes only (new nullable column, new index) and only when unavoidable.
 - New KPI logic and BI queries go **only** into `mart` (views, aggregates, functions) or, for a single
   plant, into `site_overrides/custom_views.sql` (schema `site`).
+- Additive schema changes for existing installations go into `db/mart/05_schema_additions.sql`
+  (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`) – never drop, rename or retype.
 - Every file in `db/mart/` is **idempotent** (`CREATE OR REPLACE VIEW/FUNCTION/PROCEDURE`,
   `CREATE … IF NOT EXISTS`, `GRANT`). It must be safe to re-run at any time with `make apply-sql`
   on a production database without rebuild, restart or data loss. Never put `DROP TABLE`,
@@ -35,6 +37,8 @@ this repository. They override convenience. If a task would violate a rule, stop
 - Timestamps: always `TIMESTAMPTZ`, always processed and stored in **UTC**. Never `timestamp without
   time zone`, never local time in the database. Time-zone conversion happens only at ingest
   (`SITE_TIMEZONE` → UTC) or at presentation (Grafana/BI).
+  Single exception: the shift model `core.shift_patterns` stores wall-clock `time` values together
+  with an explicit IANA `timezone` column; they are converted to UTC only in SQL (`mart.planned_seconds`).
 - Keep all identifiers, enum values and column names generic English. Localised names only as
   aliases in `site_overrides/custom_views.sql`.
 
@@ -45,7 +49,9 @@ this repository. They override convenience. If a task would violate a rule, stop
   (not inside `OR`/`NOT`). Extending a blocklist is fine; removing checks is not.
   `tests/unit/test_sql_guard.py` must keep passing unchanged (you may add cases, never delete them).
 - Read-only roles `grafana_reader`, `bi_reader`, `ai_reader` must **never** receive `INSERT`,
-  `UPDATE`, `DELETE`, `TRUNCATE`, `CREATE` or ownership. `ai_reader` keeps
+  `UPDATE`, `DELETE`, `TRUNCATE`, `CREATE` or ownership. Allowed: `SELECT`, `USAGE`, `CONNECT` and
+  `EXECUTE` on read-only (`STABLE`) functions in `mart`. A `SECURITY DEFINER` function must be
+  read-only and pin `SET search_path = pg_catalog, pg_temp`. `ai_reader` keeps
   `default_transaction_read_only = on` and `statement_timeout = 3s`. New mart objects get
   `SELECT` only (via `db/mart/90_grants.sql`).
 - API stays read-only and behind `X-API-Key`; no new unauthenticated endpoints besides `/health`.
@@ -55,6 +61,8 @@ this repository. They override convenience. If a task would violate a rule, stop
 - Only Python ≥ 3.12 managed with `uv` (`uv add`, `uv sync`, `uv.lock` committed) and SQL. No other
   programming languages, no Node/Go/Java services.
 - No heavy middleware: no Kafka, Redis, RabbitMQ, Airflow, separate scheduler or ORM container.
+- Machine connectivity (Node-RED, PLC drivers) runs on an edge gateway and is documented in
+  `docs/connectivity.md` / `examples/edge/` – it is not part of the core stack.
   Scheduling = TimescaleDB jobs. Prefer fewer containers.
 - `docker-compose.yml` must work with rootless Podman: every new bind mount has an SELinux flag
   (`:ro,z` read-only, `:z` if writable), every new service has a `healthcheck`, `restart`, the shared

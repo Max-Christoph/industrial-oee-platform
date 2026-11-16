@@ -165,6 +165,25 @@ def create_app(settings: ApiSettings | None = None, db: Database | None = None) 
             {"start": start, "end": end, "asset_id": asset_id, "limit": limit},
         )
 
+    @app.get("/v1/oee", tags=["kpi"], dependencies=v1)
+    async def oee(
+        db: DB,
+        asset_id: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        granularity: Literal["hour", "day"] = "hour",
+        limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = 1000,
+    ) -> list[dict[str, Any]]:
+        """Availability, performance, quality and OEE (ratios 0..1) - computed in SQL (mart.v_oee_*)."""
+        start, end = _window(start, end, timedelta(days=1) if granularity == "hour" else timedelta(days=30))
+        view = "mart.v_oee_hourly" if granularity == "hour" else "mart.v_oee_daily"
+        return await db.fetch(
+            f"SELECT * FROM {view} WHERE bucket >= %(start)s AND bucket < %(end)s "
+            "AND (%(asset_id)s::text IS NULL OR asset_id = %(asset_id)s) "
+            "ORDER BY bucket, asset_id LIMIT %(limit)s",
+            {"start": start, "end": end, "asset_id": asset_id, "limit": limit},
+        )
+
     @app.get("/v1/cycle-histogram", tags=["kpi"], dependencies=v1)
     async def cycle_histogram(
         db: DB,

@@ -11,8 +11,10 @@ import csv
 import logging
 import os
 import re
+from datetime import time
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -108,6 +110,72 @@ class MappingRules(BaseModel):
         return data
 
 
+WEEKDAYS = {"mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6, "sun": 7}
+
+
+class ShiftWindow(BaseModel):
+    """A recurring planned-production window in local wall-clock time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    days: list[int] = Field(min_length=1, description="weekdays the shift STARTS on: mon..sun or 1..7")
+    start: time
+    end: time  # end <= start means the shift ends on the next day
+    name: str | None = Field(default=None, max_length=64)
+
+    @field_validator("days", mode="before")
+    @classmethod
+    def _parse_days(cls, v: Any) -> list[int]:
+        items = v if isinstance(v, list) else [v]
+        out: list[int] = []
+        for item in items:
+            if isinstance(item, str) and item.strip().lower()[:3] in WEEKDAYS:
+                out.append(WEEKDAYS[item.strip().lower()[:3]])
+            elif isinstance(item, int) and not isinstance(item, bool) and 1 <= item <= 7:
+                out.append(item)
+            else:
+                raise ValueError(f"invalid weekday {item!r} (use mon..sun or 1..7)")
+        return sorted(set(out))
+
+    @model_validator(mode="after")
+    def _non_empty(self) -> ShiftWindow:
+        if self.start == self.end:
+            raise ValueError("shift start and end must differ (omit planned_time for 24/7)")
+        return self
+
+
+class PlannedTime(BaseModel):
+    """Shift model for planned production time. Omitted entirely = 24/7."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timezone: str | None = None  # default: SITE_TIMEZONE
+    default: list[ShiftWindow] = Field(default_factory=list)
+    assets: dict[str, list[ShiftWindow]] = Field(default_factory=dict)
+
+    @field_validator("timezone")
+    @classmethod
+    def _valid_tz(cls, v: str | None) -> str | None:
+        if v is not None:
+            try:
+                ZoneInfo(v)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise ValueError(f"unknown time zone {v!r}") from exc
+        return v
+
+    def rows(self) -> list[tuple[str, int, time, time, str, str | None]]:
+        tz = self.timezone or os.environ.get("SITE_TIMEZONE", "UTC")
+        rows: dict[tuple[str, int, time], tuple[str, int, time, time, str, str | None]] = {}
+        for asset_id, windows in [("*", self.default), *self.assets.items()]:
+            for w in windows:
+                for day in w.days:
+                    key = (asset_id, day, w.start)
+                    if key in rows:
+                        raise ValueError(f"duplicate shift start {w.start} on weekday {day} for {asset_id!r}")
+                    rows[key] = (asset_id, day, w.start, w.end, tz, w.name)
+        return list(rows.values())
+
+
 class SiteRules(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -116,6 +184,7 @@ class SiteRules(BaseModel):
     defaults: RuleDefaults = Field(default_factory=RuleDefaults)
     assets: dict[str, AssetRule] = Field(default_factory=dict)
     mapping: MappingRules = Field(default_factory=MappingRules)
+    planned_time: PlannedTime | None = None
 
     @model_validator(mode="after")
     def _check_merge(self) -> SiteRules:
@@ -125,7 +194,12 @@ class SiteRules(BaseModel):
                 self.defaults.merged(rule)
             except ValueError as exc:
                 raise ValueError(f"rule for asset {asset_id!r}: {exc}") from exc
+        if self.planned_time is not None:
+            self.planned_time.rows()  # raises on duplicates
         return self
+
+    def shift_rows(self) -> list[tuple[str, int, time, time, str, str | None]]:
+        return self.planned_time.rows() if self.planned_time else []
 
     def effective_rows(self) -> list[tuple[str, float, float, float, float]]:
         rows = [("*", *self._values(self.defaults))]
@@ -202,6 +276,15 @@ async def sync_site_config(conn: Any, rules: SiteRules, assets: list[AssetRow], 
                      updated_at = now()""",
                 rows,
             )
+            # shift model: full replace (no rows = 24/7 planned production)
+            await cur.execute("DELETE FROM core.shift_patterns")
+            if shifts := rules.shift_rows():
+                await cur.executemany(
+                    """INSERT INTO core.shift_patterns
+                         (asset_id, iso_weekday, start_local, end_local, timezone, shift_name)
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                    shifts,
+                )
             if assets:
                 await cur.executemany(
                     """INSERT INTO core.assets (asset_id, parent_id, name, asset_type, ideal_cycle_time_s)
@@ -211,7 +294,10 @@ async def sync_site_config(conn: Any, rules: SiteRules, assets: list[AssetRow], 
                          ideal_cycle_time_s = EXCLUDED.ideal_cycle_time_s, updated_at = now()""",
                     [(a.asset_id, a.parent_id, a.name, a.asset_type, a.ideal_cycle_time_s) for a in assets],
                 )
-    log.info("synced %d rule rows and %d assets", len(rules.effective_rows()), len(assets))
+    log.info(
+        "synced %d rule rows, %d shift patterns and %d assets",
+        len(rules.effective_rows()), len(rules.shift_rows()), len(assets),
+    )
 
     if custom_sql:
         try:

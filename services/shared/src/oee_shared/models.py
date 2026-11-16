@@ -126,6 +126,10 @@ class TelemetryEvent(BaseModel):
     event_datetime: datetime
     event_code: str | None = Field(default=None, max_length=128)
     cycle_time_s: float | None = None
+    # Optional produced quantities (e.g. on the END event of a PROCESS cycle). Stored in
+    # attributes; OEE quality/performance is computed in SQL (db/mart/30_oee.sql).
+    quantity_good: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
+    quantity_scrap: float | None = Field(default=None, ge=0, le=1e9, allow_inf_nan=False)
     attributes: dict[str, Any] = Field(default_factory=dict)
     source_topic: str | None = Field(default=None, max_length=512)
 
@@ -195,6 +199,14 @@ class TelemetryEvent(BaseModel):
             raise ValueError(f"attributes not JSON serializable: {exc}") from exc
         return v
 
+    def _attributes_with_quantities(self) -> dict[str, Any]:
+        attrs = dict(self.attributes)
+        if self.quantity_good is not None:
+            attrs["quantity_good"] = self.quantity_good
+        if self.quantity_scrap is not None:
+            attrs["quantity_scrap"] = self.quantity_scrap
+        return attrs
+
     def to_row(self) -> tuple[Any, ...]:
         """Row in :data:`EVENT_COLUMNS` order (attributes as JSON text) for COPY."""
         return (
@@ -205,7 +217,7 @@ class TelemetryEvent(BaseModel):
             self.event_category.value,
             self.event_code,
             self.cycle_time_s,
-            json.dumps(self.attributes, separators=(",", ":"), default=str),
+            json.dumps(self._attributes_with_quantities(), separators=(",", ":"), default=str),
             self.source_topic,
         )
 

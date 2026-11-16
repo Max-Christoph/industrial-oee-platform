@@ -1,8 +1,10 @@
 # industrial-oee-platform
 
-A lean, production-ready **on-premise IIoT & OEE data platform**: machine events arrive via MQTT,
-are stored in PostgreSQL/TimescaleDB and turned into cycle-time and downtime analytics for Grafana,
-Power BI / corporate BI, a REST API and LLM agents (MCP).
+A lean, production-ready **on-premise platform for machine events**: whatever your machines report
+(cycles, alarms, changeovers, counters, arbitrary attributes) arrives via MQTT, is stored in
+PostgreSQL/TimescaleDB and is available for **your own analyses** – in SQL, Grafana, Power BI /
+corporate BI, a REST API or LLM agents (MCP). Ready-made building blocks cover the common ones:
+cycle times, microstops/downtimes and **OEE** (availability × performance × quality).
 
 It runs **stand-alone without an IT department** (one `make up`, self-signed TLS) and also
 **inside strict corporate networks** (your own PKI certificates, proxies, air-gapped image
@@ -25,7 +27,9 @@ TimescaleDB background job.
 | Sustained ingest | ≥ 100 events/s (benchmarked 100 / 250 / 500 ev/s, 0 % loss) |
 | Event model | START/END pairs joined via `event_uid`, plus INSTANT events |
 | Categories | `PROCESS`, `ERROR`, `SETUP`, `STANDBY`, `INFO`, `WARNING` |
-| Analytics | cycle time median/avg/min/max/P25/P75/P95, histogram, microstops, downtimes, setup |
+| Built-in analytics | cycle time median/avg/min/max/P25/P75/P95, histogram, microstops, downtimes, setup, OEE (A × P × Q) with shift model |
+| Own analyses | any SQL view on `mart`/`core` (+ arbitrary JSON `attributes` per event); `/add-kpi-view` guides you |
+| Machine connectivity | via an edge gateway (Node-RED, PLC MQTT client, …) – see [docs/connectivity.md](docs/connectivity.md) |
 
 ---
 
@@ -85,7 +89,10 @@ object or an array of objects.
 
 * `event_datetime`: ISO-8601 or epoch s/ms. **Naive timestamps are interpreted in `SITE_TIMEZONE`**
   and converted to UTC; everything is stored as `timestamptz` (UTC).
-* Unknown fields are kept in `attributes` (jsonb).
+* Optional `quantity_good` / `quantity_scrap` (e.g. on the END of a `PROCESS` cycle) feed the OEE
+  quality and performance; without them every valid cycle counts as one good unit.
+* Unknown fields are kept in `attributes` (jsonb) – store whatever fits your machines and evaluate
+  it with your own SQL views.
 * Rejected input (invalid JSON, negative/implausible cycle times, timestamps > 5 min in the future,
   unknown categories) is written to `core.error_logs` – valid neighbours in the same message/batch
   are still stored.
@@ -109,6 +116,8 @@ mosquitto_pub -h <host> -p 8883 --cafile site_overrides/certs/ca.crt -u oee_devi
 | `mart.event_intervals` | paired START/END intervals with `stop_class` (`CYCLE`, `MICROSTOP`, `DOWNTIME`, `SETUP`) and validity |
 | `mart.cycle_metrics` | hourly per asset: median, avg, min, max, P25, P75, P95, microstops, downtimes, setup |
 | `mart.cycle_histogram` | daily cycle-time distribution per asset |
+| `core.shift_patterns` | optional shift model (planned production time) from `planned_time` in `oee_rules.yaml` |
+| `mart.v_oee_hourly` / `v_oee_daily`, `mart.oee_summary(from, to, assets)` | OEE per asset (see below) |
 | `mart.v_*` | **stable BI contract**: `v_asset_hierarchy`, `v_cycle_metrics_hourly`, `v_cycle_metrics_daily`, `v_cycle_histogram`, `v_stop_events`, `v_pipeline_health`, `v_error_logs` |
 | `site.*` | optional site-specific alias views (`custom_views.sql`) |
 
@@ -118,6 +127,22 @@ native TimescaleDB job (`add_job`). It processes only events received since the 
 affected hours/days and logs any failure to `core.error_logs` (`EXCEPTION` block) instead of
 crashing. Classification: `PROCESS` → cycle (valid if `min_cycle_s ≤ d ≤ max_cycle_s`),
 `ERROR`/`STANDBY` → microstop if `< microstop_max_s`, otherwise downtime, `SETUP` → setup.
+
+**OEE** (all in SQL, `db/mart/30_oee.sql`), per asset and hour/day:
+
+| Term | Definition |
+|------|------------|
+| planned time | from the shift model (`planned_time` in `oee_rules.yaml`); **no shift model = 24/7** |
+| run time | planned time − downtimes − setup (microstops count as performance loss) |
+| availability | run time / planned time |
+| performance | ideal cycle time (`assets.csv`) × total quantity / run time |
+| quality | good quantity / total quantity |
+| OEE | availability × performance × quality |
+
+Day and range values (`v_oee_daily`, `oee_summary`) are ratios of sums, never averages of hourly
+ratios. Simplifications: stops and cycles count in the hour in which they start; hours without
+any event from an asset have no row. Need a different definition (e.g. setup as planned time)?
+Add your own view with `/add-kpi-view` – the building blocks are all in `mart`.
 
 **Roles (least privilege):**
 
@@ -137,7 +162,9 @@ counterpart from the fictional demo plant in `examples/demo_plant/`:
 
 * `oee_rules.yaml` – thresholds per asset + payload mapping (field/category/state/asset aliases,
   asset-from-topic regex) to translate PLC dialects into the generic schema.
-* `assets.csv` – your asset hierarchy.
+* `assets.csv` – your asset hierarchy (incl. ideal cycle time for OEE performance).
+* `oee_rules.yaml` → `planned_time` – optional shift model for OEE availability (example in the
+  demo file).
 * `custom_views.sql` – BI alias views in schema `site` (e.g. localized column names for Power BI).
 * `certs/server.crt`, `certs/server.key` (+ `certs/ca.crt`) – your **corporate PKI** certificates
   for PostgreSQL and Mosquitto. If none are present, `make up` creates a self-signed CA + server

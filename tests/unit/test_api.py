@@ -38,7 +38,8 @@ def client(db: FakeDB) -> TestClient:
         yield c
 
 
-ENDPOINTS = ["/v1/assets", "/v1/pipeline-health", "/v1/cycle-metrics", "/v1/stops", "/v1/cycle-histogram?asset_id=A"]
+ENDPOINTS = ["/v1/assets", "/v1/pipeline-health", "/v1/cycle-metrics", "/v1/stops", "/v1/oee",
+             "/v1/cycle-histogram?asset_id=A"]
 
 
 @pytest.mark.parametrize("path", ENDPOINTS)
@@ -101,3 +102,12 @@ def test_invalid_stop_class(client):
 def test_no_write_methods(client):
     for method in ("post", "put", "patch", "delete"):
         assert getattr(client, method)("/v1/assets", headers={"X-API-Key": KEY}).status_code == 405
+
+
+@pytest.mark.parametrize("granularity, view", [("hour", "mart.v_oee_hourly"), ("day", "mart.v_oee_daily")])
+def test_oee_is_a_plain_select_on_the_sql_view(client, db, granularity, view):
+    r = client.get("/v1/oee", params={"asset_id": "LINE-01-M01", "granularity": granularity},
+                   headers={"X-API-Key": KEY})
+    assert r.status_code == 200
+    sql, params = db.calls[-1]
+    assert f"FROM {view}" in sql and params["asset_id"] == "LINE-01-M01"

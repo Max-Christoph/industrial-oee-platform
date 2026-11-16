@@ -21,6 +21,18 @@ assets:
     max_cycle_s: 900
     histogram_bin_s: 5
 
+# Planned production time for OEE availability (optional).
+# Omit this block = 24/7 planned production. Times are local wall-clock in `timezone`
+# (default: SITE_TIMEZONE); `days` = weekday the shift STARTS; end <= start = ends next day.
+# planned_time:
+#   timezone: Europe/Berlin
+#   default:                       # all assets without own entry
+#     - {days: [mon, tue, wed, thu, fri], start: "06:00", end: "14:00", name: early}
+#     - {days: [mon, tue, wed, thu, fri], start: "14:00", end: "22:00", name: late}
+#   assets:
+#     LINE-02-M01:
+#       - {days: [mon, tue, wed, thu, fri, sat], start: "22:00", end: "06:00", name: night}
+
 # Translate plant-specific payload dialects into the generic event schema
 mapping:
   # Asset id from topic when the payload has none: oee/<site>/<asset_id>/events
@@ -34,6 +46,8 @@ mapping:
     asset: asset_id
     code: event_code
     cycle_time: cycle_time_s
+    good: quantity_good
+    scrap: quantity_scrap
   category_aliases:
     RUN: PROCESS
     PRODUCTION: PROCESS

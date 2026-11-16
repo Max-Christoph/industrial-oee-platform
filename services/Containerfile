@@ -25,8 +25,7 @@ RUN if [ -n "$UV_INDEX_URL" ]; then export UV_DEFAULT_INDEX="$UV_INDEX_URL"; fi;
 
 FROM ${PYTHON_IMAGE}
 LABEL org.opencontainers.image.title="oee-services" \
-      org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.source="https://github.com/your-org/industrial-oee-platform"
+      org.opencontainers.image.licenses="Apache-2.0"
 ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 RUN groupadd --system --gid 10001 oee && useradd --system --uid 10001 --gid oee --home /app oee
 WORKDIR /app

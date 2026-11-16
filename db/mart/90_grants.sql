@@ -10,4 +10,13 @@ END
 $$;
 
 GRANT USAGE ON SCHEMA mart TO oee_app, grafana_reader, bi_reader, ai_reader;
+
+-- Shift model: written by the site config sync (oee_app), readable for dashboards/AI.
+GRANT SELECT, INSERT, UPDATE, DELETE ON core.shift_patterns TO oee_app;
+GRANT SELECT ON core.shift_patterns TO grafana_reader, ai_reader;
 GRANT SELECT ON ALL TABLES IN SCHEMA mart TO oee_app, grafana_reader, bi_reader, ai_reader;
+
+-- KPI functions callable by the read-only roles (functions are read-only, STABLE).
+GRANT USAGE ON SCHEMA mart TO grafana_reader, bi_reader, ai_reader;
+GRANT EXECUTE ON FUNCTION mart.planned_seconds(text, timestamptz, timestamptz) TO grafana_reader, bi_reader, ai_reader;
+GRANT EXECUTE ON FUNCTION mart.oee_summary(timestamptz, timestamptz, text[]) TO grafana_reader, bi_reader, ai_reader;

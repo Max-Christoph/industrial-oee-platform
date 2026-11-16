@@ -63,4 +63,5 @@ def conn(test_dsn: str) -> Iterator[psycopg.Connection]:
                       "mart.cycle_histogram", "mart.pipeline_state"):
             c.execute(f"TRUNCATE {table}")
         c.execute("DELETE FROM core.oee_rules WHERE asset_id <> '*'")
+        c.execute("DELETE FROM core.shift_patterns")
         yield c

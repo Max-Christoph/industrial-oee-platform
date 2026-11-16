@@ -63,9 +63,10 @@ def test_read_only_roles_never_get_write_privileges(path):
     for stmt in re.findall(r"GRANT\s[^;]+;", sql, flags=re.IGNORECASE | re.DOTALL):
         privileges = stmt.upper().split(" ON ")[0]
         if any(role in stmt for role in READ_ONLY_ROLES) and " TO " in stmt.upper():
-            assert re.fullmatch(r"\s*GRANT\s+(SELECT|USAGE|CONNECT)(\s*,\s*(SELECT|USAGE|CONNECT))*\s*", privileges), (
-                f"{path.name}: read-only role receives more than SELECT/USAGE/CONNECT: {stmt.strip()}"
-            )
+            ok = re.fullmatch(r"\s*GRANT\s+(SELECT|USAGE|CONNECT)(\s*,\s*(SELECT|USAGE|CONNECT))*\s*", privileges)
+            # EXECUTE only on (read-only, STABLE) functions in schema mart
+            ok = ok or re.fullmatch(r"\s*GRANT\s+EXECUTE\s*", privileges) and " ON FUNCTION MART." in stmt.upper()
+            assert ok, f"{path.name}: read-only role receives more than SELECT/USAGE/CONNECT: {stmt.strip()}"
 
 
 def test_ai_reader_stays_read_only_with_timeout():

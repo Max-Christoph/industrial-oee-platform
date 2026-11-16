@@ -1,0 +1,186 @@
+[
+  {
+    "id": "tab1",
+    "type": "tab",
+    "label": "Machine -> industrial-oee-platform",
+    "env": [
+      {
+        "name": "ASSET_ID",
+        "value": "LINE-01-M01",
+        "type": "str"
+      },
+      {
+        "name": "SITE_ID",
+        "value": "site1",
+        "type": "str"
+      }
+    ]
+  },
+  {
+    "id": "note1",
+    "type": "comment",
+    "z": "tab1",
+    "name": "Replace the inject nodes with your S7 / OPC UA / Modbus read node",
+    "info": "See docs/connectivity.md. The inject nodes simulate a 'cycle running' bit and an alarm bit.",
+    "x": 300,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "inj1",
+    "type": "inject",
+    "z": "tab1",
+    "name": "cycle running",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "once": false,
+    "payload": "true",
+    "payloadType": "bool",
+    "x": 150,
+    "y": 100,
+    "wires": [
+      [
+        "fn_process"
+      ]
+    ]
+  },
+  {
+    "id": "inj2",
+    "type": "inject",
+    "z": "tab1",
+    "name": "cycle finished",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "once": false,
+    "payload": "false",
+    "payloadType": "bool",
+    "x": 150,
+    "y": 140,
+    "wires": [
+      [
+        "fn_process"
+      ]
+    ]
+  },
+  {
+    "id": "inj3",
+    "type": "inject",
+    "z": "tab1",
+    "name": "alarm on",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "once": false,
+    "payload": "true",
+    "payloadType": "bool",
+    "x": 150,
+    "y": 220,
+    "wires": [
+      [
+        "fn_error"
+      ]
+    ]
+  },
+  {
+    "id": "inj4",
+    "type": "inject",
+    "z": "tab1",
+    "name": "alarm off",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "once": false,
+    "payload": "false",
+    "payloadType": "bool",
+    "x": 150,
+    "y": 260,
+    "wires": [
+      [
+        "fn_error"
+      ]
+    ]
+  },
+  {
+    "id": "fn_process",
+    "type": "function",
+    "z": "tab1",
+    "name": "run bit -> PROCESS events",
+    "func": "// Turns a boolean machine signal into START/END events for the platform.\n// msg.payload: true = active, false = inactive - e.g. from an S7, OPC UA or Modbus node.\n// Configure per node: CATEGORY = PROCESS (cycle running), ERROR (alarm bit), SETUP (changeover) ...\nconst CATEGORY = \"PROCESS\";\nconst ASSET = env.get(\"ASSET_ID\") || \"LINE-01-M01\";   // set in the flow/tab environment\nconst SITE = env.get(\"SITE_ID\") || \"site1\";\n\nconst active = msg.payload === true || msg.payload === 1 || msg.payload === \"true\";\nconst stateKey = \"active_\" + CATEGORY, uidKey = \"uid_\" + CATEGORY;\nif (context.get(stateKey) === active) return null;      // react on edges only\ncontext.set(stateKey, active);\n\nlet event;\nif (active) {\n    const uid = ASSET + \"-\" + CATEGORY + \"-\" + Date.now();\n    context.set(uidKey, uid);\n    event = { event_uid: uid, event_state: \"START\" };\n} else {\n    const uid = context.get(uidKey);\n    if (!uid) return null;                               // END without START (e.g. after a restart)\n    context.set(uidKey, null);\n    event = { event_uid: uid, event_state: \"END\" };\n    // Optional: produced quantities for OEE quality, e.g. from a part counter:\n    // event.quantity_good = msg.good; event.quantity_scrap = msg.scrap;\n}\nevent.asset_id = ASSET;\nevent.event_category = CATEGORY;\nevent.event_datetime = new Date().toISOString();        // gateway clock -> keep it NTP-synced\nif (msg.code !== undefined) event.event_code = String(msg.code);\n\nreturn { topic: \"oee/\" + SITE + \"/\" + ASSET + \"/events\", payload: event, qos: 1 };\n",
+    "outputs": 1,
+    "x": 400,
+    "y": 120,
+    "wires": [
+      [
+        "mqtt_out"
+      ]
+    ]
+  },
+  {
+    "id": "fn_error",
+    "type": "function",
+    "z": "tab1",
+    "name": "alarm bit -> ERROR events",
+    "func": "// Turns a boolean machine signal into START/END events for the platform.\n// msg.payload: true = active, false = inactive - e.g. from an S7, OPC UA or Modbus node.\n// Configure per node: CATEGORY = PROCESS (cycle running), ERROR (alarm bit), SETUP (changeover) ...\nconst CATEGORY = \"ERROR\";\nconst ASSET = env.get(\"ASSET_ID\") || \"LINE-01-M01\";   // set in the flow/tab environment\nconst SITE = env.get(\"SITE_ID\") || \"site1\";\n\nconst active = msg.payload === true || msg.payload === 1 || msg.payload === \"true\";\nconst stateKey = \"active_\" + CATEGORY, uidKey = \"uid_\" + CATEGORY;\nif (context.get(stateKey) === active) return null;      // react on edges only\ncontext.set(stateKey, active);\n\nlet event;\nif (active) {\n    const uid = ASSET + \"-\" + CATEGORY + \"-\" + Date.now();\n    context.set(uidKey, uid);\n    event = { event_uid: uid, event_state: \"START\" };\n} else {\n    const uid = context.get(uidKey);\n    if (!uid) return null;                               // END without START (e.g. after a restart)\n    context.set(uidKey, null);\n    event = { event_uid: uid, event_state: \"END\" };\n    // Optional: produced quantities for OEE quality, e.g. from a part counter:\n    // event.quantity_good = msg.good; event.quantity_scrap = msg.scrap;\n}\nevent.asset_id = ASSET;\nevent.event_category = CATEGORY;\nevent.event_datetime = new Date().toISOString();        // gateway clock -> keep it NTP-synced\nif (msg.code !== undefined) event.event_code = String(msg.code);\n\nreturn { topic: \"oee/\" + SITE + \"/\" + ASSET + \"/events\", payload: event, qos: 1 };\n",
+    "outputs": 1,
+    "x": 400,
+    "y": 240,
+    "wires": [
+      [
+        "mqtt_out"
+      ]
+    ]
+  },
+  {
+    "id": "mqtt_out",
+    "type": "mqtt out",
+    "z": "tab1",
+    "name": "platform (TLS 8883)",
+    "topic": "",
+    "qos": "1",
+    "retain": "false",
+    "broker": "broker1",
+    "x": 680,
+    "y": 180,
+    "wires": []
+  },
+  {
+    "id": "broker1",
+    "type": "mqtt-broker",
+    "name": "industrial-oee-platform",
+    "broker": "oee-platform.example",
+    "port": "8883",
+    "usetls": true,
+    "tls": "tls1",
+    "clientid": "",
+    "autoConnect": true,
+    "protocolVersion": "4",
+    "keepalive": "30",
+    "cleansession": true
+  },
+  {
+    "id": "tls1",
+    "type": "tls-config",
+    "name": "platform CA",
+    "cert": "",
+    "key": "",
+    "ca": "",
+    "certname": "",
+    "keyname": "",
+    "caname": "ca.crt",
+    "verifyservercert": true
+  }
+]
