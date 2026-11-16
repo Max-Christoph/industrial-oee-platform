@@ -6,7 +6,7 @@ argument-hint: "[short description of the KPI, e.g. 'scrap rate per shift']"
 # /add-kpi-view – add a new KPI safely
 
 You are guiding a colleague who may have little SQL/Python experience. Be friendly, explain each step
-in one sentence, and **follow CLAUDE.md strictly** (SQL = domain logic, Python = transport; `core` is
+in one sentence, and **follow AGENTS.md strictly** (SQL = domain logic, Python = transport; `core` is
 never changed destructively; read-only roles get `SELECT` only; no secrets / plant data in the repo).
 
 KPI request from the user: $ARGUMENTS

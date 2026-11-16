@@ -1,4 +1,4 @@
-"""Static checks that enforce the AI/contributor rules from CLAUDE.md / AGENTS.md.
+"""Static checks that enforce the AI/contributor rules from AGENTS.md.
 
 These tests are part of the Definition of Done - do not weaken them.
 """
@@ -20,9 +20,11 @@ def _strip_sql_comments(sql: str) -> str:
     return re.sub(r"--[^\n]*", "", sql)
 
 
-def test_agents_md_identical_to_claude_md():
-    assert (REPO / "AGENTS.md").read_bytes() == (REPO / "CLAUDE.md").read_bytes(), (
-        "AGENTS.md must be an identical copy of CLAUDE.md (cp CLAUDE.md AGENTS.md)"
+def test_agents_md_is_the_only_rules_file():
+    agents = REPO / "AGENTS.md"
+    assert agents.is_file() and agents.stat().st_size > 0, "AGENTS.md must exist"
+    assert not (REPO / "CLAUDE.md").exists(), (
+        "CLAUDE.md must not exist – AGENTS.md is the single source of truth (Claude Code reads it too)"
     )
 
 

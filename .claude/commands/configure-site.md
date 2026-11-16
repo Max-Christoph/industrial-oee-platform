@@ -9,7 +9,7 @@ You are helping a colleague configure this platform for **their** plant. They ma
 Go step by step, ask short questions, show what you will write, and confirm before writing.
 Focus: $ARGUMENTS
 
-## Hard rules (from CLAUDE.md)
+## Hard rules (from AGENTS.md)
 - Write **only** inside `site_overrides/` (git-ignored). Never edit `services/`, `db/`, `examples/`,
   `docker-compose.yml` or other tracked files in this workflow.
 - Real plant data (machine names, server names, SAP numbers …) is fine **inside `site_overrides/`**

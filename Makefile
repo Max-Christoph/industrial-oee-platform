@@ -1,7 +1,7 @@
 # industrial-oee-platform - all standard workflows
 # Usage: make help      New here? Run: make doctor
 #
-# House rules (details in CLAUDE.md / AGENTS.md):
+# House rules (details in AGENTS.md):
 #   * SQL = domain logic, Python = transport. KPIs, percentiles, stop classification live ONLY in
 #     db/mart/*.sql (idempotent CREATE OR REPLACE ...) and are activated with `make apply-sql`.
 #   * Never change core.* destructively; read-only roles get SELECT only.

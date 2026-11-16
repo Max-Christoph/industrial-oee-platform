@@ -1,8 +1,7 @@
-# Rules for AI coding agents (CLAUDE.md = AGENTS.md)
+# Rules for AI coding agents
 
 These rules are **mandatory** for every AI agent (Claude Code, Codex, Copilot, Cursor, …) working in
 this repository. They override convenience. If a task would violate a rule, stop and ask the human.
-`AGENTS.md` is an identical copy – change both or neither.
 
 ## 1. No secrets, no company data – ever
 - NEVER write real server names, IP addresses, hostnames, SAP/material/order numbers, internal process

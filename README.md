@@ -224,7 +224,7 @@ uv run python -m mcp_server --stdio            # local agent (DATABASE_URL=postg
 
 ## Development
 
-**House rules** (binding for humans and AI agents – see [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md)):
+**House rules** (binding for humans and AI agents – see [AGENTS.md](AGENTS.md)):
 **SQL = domain logic, Python = transport.** Every KPI, percentile or stop classification is SQL in
 `db/mart/`; the Python services only validate, move and serialise data. `core` is never changed
 destructively, read-only roles only ever get `SELECT`, the MCP SQL guard is never relaxed, no plant
@@ -275,9 +275,9 @@ grafana/        provisioning + "OEE Live" dashboard
 examples/       demo_plant (default seed)
 site_overrides/ your plant (git-ignored)
 scripts/        env/cert generation, doctor, dev mode, preflight, backup, image export, benchmark
-tests/          unit, guardrail (enforces CLAUDE.md rules) + integration
+tests/          unit, guardrail (enforces AGENTS.md rules) + integration
 .claude/        guided slash commands (/add-kpi-view, /configure-site)
-CLAUDE.md       rules for AI coding agents (AGENTS.md = identical copy)
+AGENTS.md       rules for AI coding agents (binding house rules)
 ```
 
 ## License

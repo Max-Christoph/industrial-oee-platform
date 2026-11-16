@@ -1,6 +1,6 @@
 """AST-based guard for LLM-generated SQL (sqlglot, PostgreSQL dialect).
 
-SECURITY INVARIANTS - never relax these (see CLAUDE.md):
+SECURITY INVARIANTS - never relax these (see AGENTS.md):
   1. exactly one statement, and it must be a SELECT (incl. WITH / UNION of SELECTs);
   2. no DML/DDL/utility nodes anywhere in the tree (also not in CTEs);
   3. only schema-qualified tables from ALLOWED_SCHEMAS (or CTE names);
