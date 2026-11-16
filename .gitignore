@@ -1,0 +1,38 @@
+# Secrets & local environment
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Site-specific configuration (plant data, PKI, BI aliases) - never commit
+site_overrides/*
+!site_overrides/README.md
+!site_overrides/certs/
+site_overrides/certs/*
+!site_overrides/certs/.gitkeep
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Operational artefacts
+backups/*
+!backups/.gitkeep
+dist/
+*.tar
+*.dump
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings
+.claude/settings.local.json

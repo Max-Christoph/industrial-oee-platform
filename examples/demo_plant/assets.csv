@@ -1,0 +1,9 @@
+asset_id,parent_id,name,asset_type,ideal_cycle_time_s
+DEMO-PLANT,,Demo Plant,site,
+DEMO-ASSEMBLY,DEMO-PLANT,Assembly Hall,area,
+LINE-01,DEMO-ASSEMBLY,Line 01,line,
+LINE-01-M01,LINE-01,Press 01,machine,12.0
+LINE-01-M02,LINE-01,Welding Cell 02,machine,15.0
+LINE-01-M03,LINE-01,Inspection 03,machine,8.0
+LINE-02,DEMO-ASSEMBLY,Line 02,line,
+LINE-02-M01,LINE-02,Packaging 01,machine,30.0

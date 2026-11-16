@@ -1,0 +1,10 @@
+# Field devices / PLC gateways may only publish telemetry.
+# Ingest worker may only consume telemetry.
+# Usernames are injected by entrypoint.sh (placeholders replaced at start).
+
+user __DEVICE_USER__
+topic write oee/#
+
+user __INGEST_USER__
+topic read oee/#
+topic read $SYS/#

@@ -1,0 +1,6 @@
+# Containers run on Linux: always LF, regardless of the client OS.
+* text=auto eol=lf
+*.sh text eol=lf
+Makefile text eol=lf
+*.tar binary
+*.dump binary

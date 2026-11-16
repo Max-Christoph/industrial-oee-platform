@@ -1,0 +1,57 @@
+[project]
+name = "industrial-oee-platform"
+version = "0.1.0"
+description = "Lean on-premise IIoT & OEE data platform (MQTT -> TimescaleDB -> BI/Grafana/API/MCP)"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+    "oee-shared",
+    "ingest-worker",
+    "api-gateway",
+    "mcp-server",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["services/shared", "services/ingest_worker", "services/api_gateway", "services/mcp_server"]
+
+[tool.uv.sources]
+oee-shared = { workspace = true }
+ingest-worker = { workspace = true }
+api-gateway = { workspace = true }
+mcp-server = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    "ruff>=0.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: requires a running TimescaleDB (set OEE_TEST_DSN)",
+]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["S101", "S608"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["oee_shared", "ingest_worker", "api_gateway", "mcp_server", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108", "B017"]
+"scripts/benchmark.py" = ["S311"]

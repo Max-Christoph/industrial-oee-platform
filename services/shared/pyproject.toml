@@ -1,0 +1,19 @@
+[project]
+name = "oee-shared"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "pyyaml>=6.0",
+    "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
+    "tzdata>=2024.2",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/oee_shared"]

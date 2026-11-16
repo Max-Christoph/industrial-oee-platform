@@ -1,0 +1,36 @@
+# One lean image for all Python services (ingest_worker, api_gateway, mcp_server).
+# Build args allow corporate proxies and internal package mirrors (air-gap prep).
+ARG PYTHON_IMAGE=docker.io/library/python:3.12-slim-bookworm
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.10
+
+FROM ${UV_IMAGE} AS uv
+
+FROM ${PYTHON_IMAGE} AS build
+ARG HTTP_PROXY HTTPS_PROXY NO_PROXY UV_INDEX_URL
+ENV http_proxy=${HTTP_PROXY} https_proxy=${HTTPS_PROXY} no_proxy=${NO_PROXY} \
+    UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never UV_PROJECT_ENVIRONMENT=/app/.venv
+COPY --from=uv /uv /usr/local/bin/uv
+WORKDIR /app
+COPY pyproject.toml uv.lock README.md ./
+COPY services/shared/pyproject.toml services/shared/pyproject.toml
+COPY services/ingest_worker/pyproject.toml services/ingest_worker/pyproject.toml
+COPY services/api_gateway/pyproject.toml services/api_gateway/pyproject.toml
+COPY services/mcp_server/pyproject.toml services/mcp_server/pyproject.toml
+COPY services/shared/src services/shared/src
+COPY services/ingest_worker/src services/ingest_worker/src
+COPY services/api_gateway/src services/api_gateway/src
+COPY services/mcp_server/src services/mcp_server/src
+RUN if [ -n "$UV_INDEX_URL" ]; then export UV_DEFAULT_INDEX="$UV_INDEX_URL"; fi; \
+    uv sync --frozen --no-dev --no-editable --all-packages
+
+FROM ${PYTHON_IMAGE}
+LABEL org.opencontainers.image.title="oee-services" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/your-org/industrial-oee-platform"
+ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+RUN groupadd --system --gid 10001 oee && useradd --system --uid 10001 --gid oee --home /app oee
+WORKDIR /app
+COPY --from=build --chown=oee:oee /app/.venv /app/.venv
+COPY --chown=oee:oee scripts/benchmark.py /app/scripts/benchmark.py
+USER oee
+CMD ["python", "-m", "ingest_worker"]

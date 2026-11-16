@@ -1,0 +1,54 @@
+# Demo plant "Acme Widgets - Plant Demo" (fictional). Copy to site_overrides/oee_rules.yaml and adapt.
+version: 1
+
+site:
+  name: Demo Plant
+  description: Fictional two-line assembly plant used as default seed and in tests.
+
+# Plant-wide analysis defaults (asset_id '*' in core.oee_rules)
+defaults:
+  min_cycle_s: 1.0          # shorter PROCESS intervals are flagged invalid (sensor bounce)
+  max_cycle_s: 600.0        # longer PROCESS intervals are flagged invalid (missing END / operator pause)
+  microstop_max_s: 300.0    # ERROR/STANDBY shorter than this = microstop, otherwise downtime
+  histogram_bin_s: 1.0      # bin width of mart.cycle_histogram
+
+# Per-asset overrides (merged over defaults)
+assets:
+  LINE-01-M01:
+    max_cycle_s: 120
+  LINE-02-M01:
+    min_cycle_s: 5
+    max_cycle_s: 900
+    histogram_bin_s: 5
+
+# Translate plant-specific payload dialects into the generic event schema
+mapping:
+  # Asset id from topic when the payload has none: oee/<site>/<asset_id>/events
+  topic_asset_regex: '^oee/[^/]+/(?P<asset_id>[^/]+)/events$'
+  field_aliases:
+    ts: event_datetime
+    timestamp: event_datetime
+    uid: event_uid
+    state: event_state
+    category: event_category
+    asset: asset_id
+    code: event_code
+    cycle_time: cycle_time_s
+  category_aliases:
+    RUN: PROCESS
+    PRODUCTION: PROCESS
+    FAULT: ERROR
+    ALARM: ERROR
+    CHANGEOVER: SETUP
+    IDLE: STANDBY
+    WAITING: STANDBY
+  state_aliases:
+    BEGIN: START
+    STARTED: START
+    STOP: END
+    FINISHED: END
+    DONE: END
+    EVENT: INSTANT
+  asset_aliases:
+    PLC_PRESS_A: LINE-01-M01
+    PLC_WELD_B: LINE-01-M02

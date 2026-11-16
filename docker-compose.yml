@@ -1,0 +1,265 @@
+# industrial-oee-platform – compose stack (Rootless Podman first, Docker compatible)
+#
+#   make up        # preferred: runs preflight, .env + cert generation, then `podman compose up -d --build`
+#
+# All site-specific configuration is mounted read-only from:
+#   ./examples/demo_plant  -> /site/defaults   (fictional demo plant, default seed)
+#   ./site_overrides       -> /site/overrides  (your plant / your IT; per-file override wins)
+
+name: oee
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-service-build: &service-build
+  context: .
+  dockerfile: services/Containerfile
+  args:
+    HTTP_PROXY: ${HTTP_PROXY:-}
+    HTTPS_PROXY: ${HTTPS_PROXY:-}
+    NO_PROXY: ${NO_PROXY:-}
+    UV_INDEX_URL: ${UV_INDEX_URL:-}
+    PYTHON_IMAGE: ${PYTHON_IMAGE:-docker.io/library/python:3.12-slim-bookworm}
+
+x-service-env: &service-env
+  SITE_TIMEZONE: ${SITE_TIMEZONE:-Europe/Berlin}
+  SITE_DEFAULTS_DIR: /site/defaults
+  SITE_OVERRIDES_DIR: /site/overrides
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+networks:
+  oee_net:
+    name: oee_net
+    driver: bridge
+
+volumes:
+  pgdata:
+  mosquitto_data:
+  grafana_data:
+
+services:
+  timescaledb:
+    image: ${TIMESCALEDB_IMAGE:-docker.io/timescale/timescaledb:2.17.2-pg16}
+    container_name: oee-timescaledb
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/opt/oee/db-entrypoint.sh"]
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=timescaledb
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-1GB}
+      - -c
+      - max_wal_size=${PG_MAX_WAL_SIZE:-2GB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-3GB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-32MB}
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-256MB}
+      - -c
+      - timescaledb.max_background_workers=8
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/var/lib/postgresql/certs/server.crt
+      - -c
+      - ssl_key_file=/var/lib/postgresql/certs/server.key
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - log_min_duration_statement=${PG_LOG_MIN_DURATION_MS:-2000}
+      - -c
+      - timezone=UTC
+    shm_size: 1g
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-oee}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run 'make env' first}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      OEE_APP_PASSWORD: ${OEE_APP_PASSWORD:?}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?}
+      BI_DB_PASSWORD: ${BI_DB_PASSWORD:?}
+      AI_DB_PASSWORD: ${AI_DB_PASSWORD:?}
+      PG_SSL_ONLY_REMOTE: ${PG_SSL_ONLY_REMOTE:-true}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro,z
+      - ./db/scripts:/opt/oee:ro,z
+      - ./db/mart:/opt/oee-mart:ro,z
+      - ./site_overrides/certs:/certs:ro,z
+    ports:
+      - "${PG_PUBLISH_ADDRESS:-0.0.0.0}:${PG_PORT:-5432}:5432"
+    networks: [oee_net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-oee} -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    logging: *default-logging
+
+  mosquitto:
+    image: ${MOSQUITTO_IMAGE:-docker.io/library/eclipse-mosquitto:2.0.20}
+    container_name: oee-mosquitto
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/mosquitto/config/entrypoint.sh"]
+    environment:
+      MQTT_INGEST_USER: ${MQTT_INGEST_USER:-oee_ingest}
+      MQTT_INGEST_PASSWORD: ${MQTT_INGEST_PASSWORD:?}
+      MQTT_DEVICE_USER: ${MQTT_DEVICE_USER:-oee_device}
+      MQTT_DEVICE_PASSWORD: ${MQTT_DEVICE_PASSWORD:?}
+    volumes:
+      - ./mosquitto:/mosquitto/config:ro,z
+      - ./site_overrides/certs:/certs:ro,z
+      - mosquitto_data:/mosquitto/data
+    ports:
+      - "${MQTT_PUBLISH_ADDRESS:-0.0.0.0}:${MQTT_TLS_PORT:-8883}:8883"
+    networks: [oee_net]
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -p 1883 -u \"$$MQTT_INGEST_USER\" -P \"$$MQTT_INGEST_PASSWORD\" -t '$$SYS/broker/uptime' -C 1 -W 5 >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    logging: *default-logging
+
+  ingest_worker:
+    build: *service-build
+    image: ${SERVICES_IMAGE:-localhost/oee-services:latest}
+    container_name: oee-ingest-worker
+    restart: unless-stopped
+    command: ["python", "-m", "ingest_worker"]
+    depends_on:
+      timescaledb: { condition: service_healthy }
+      mosquitto: { condition: service_healthy }
+    environment:
+      <<: *service-env
+      DATABASE_URL: postgresql://oee_app:${OEE_APP_PASSWORD}@timescaledb:5432/${POSTGRES_DB:-oee}?sslmode=require
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_USERNAME: ${MQTT_INGEST_USER:-oee_ingest}
+      MQTT_PASSWORD: ${MQTT_INGEST_PASSWORD}
+      MQTT_TOPIC: ${MQTT_TOPIC:-oee/#}
+      MQTT_CLIENT_ID: ${MQTT_CLIENT_ID:-oee-ingest-worker}
+      BATCH_MAX_SIZE: ${BATCH_MAX_SIZE:-1000}
+      BATCH_MAX_WAIT_MS: ${BATCH_MAX_WAIT_MS:-250}
+      MAX_CYCLE_TIME_S: ${MAX_CYCLE_TIME_S:-86400}
+      MAX_FUTURE_SKEW_S: ${MAX_FUTURE_SKEW_S:-300}
+      # Benchmark verification/cleanup (only used by `make bench`)
+      BENCH_ADMIN_DSN: postgresql://postgres:${POSTGRES_PASSWORD}@timescaledb:5432/${POSTGRES_DB:-oee}?sslmode=require
+      BENCH_MQTT_USERNAME: ${MQTT_DEVICE_USER:-oee_device}
+      BENCH_MQTT_PASSWORD: ${MQTT_DEVICE_PASSWORD}
+    volumes:
+      - ./examples/demo_plant:/site/defaults:ro,z
+      - ./site_overrides:/site/overrides:ro,z
+    networks: [oee_net]
+    healthcheck:
+      test: ["CMD", "python", "-m", "ingest_worker.healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    logging: *default-logging
+
+  api_gateway:
+    build: *service-build
+    image: ${SERVICES_IMAGE:-localhost/oee-services:latest}
+    container_name: oee-api-gateway
+    restart: unless-stopped
+    command: ["uvicorn", "api_gateway.app:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--no-server-header"]
+    depends_on:
+      timescaledb: { condition: service_healthy }
+    environment:
+      <<: *service-env
+      DATABASE_URL: postgresql://bi_reader:${BI_DB_PASSWORD}@timescaledb:5432/${POSTGRES_DB:-oee}?sslmode=require
+      API_KEYS: ${API_KEYS:?}
+    ports:
+      - "${API_PUBLISH_ADDRESS:-0.0.0.0}:${API_PORT:-8000}:8000"
+    networks: [oee_net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 15s
+    logging: *default-logging
+
+  mcp_server:
+    build: *service-build
+    image: ${SERVICES_IMAGE:-localhost/oee-services:latest}
+    container_name: oee-mcp-server
+    restart: unless-stopped
+    command: ["python", "-m", "mcp_server", "--host", "0.0.0.0", "--port", "8001"]
+    depends_on:
+      timescaledb: { condition: service_healthy }
+    environment:
+      <<: *service-env
+      DATABASE_URL: postgresql://ai_reader:${AI_DB_PASSWORD}@timescaledb:5432/${POSTGRES_DB:-oee}?sslmode=require
+    ports:
+      # MCP has no built-in auth -> loopback only by default; put a reverse proxy in front for remote use.
+      - "${MCP_PUBLISH_ADDRESS:-127.0.0.1}:${MCP_PORT:-8001}:8001"
+    networks: [oee_net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8001), 3).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 15s
+    logging: *default-logging
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-docker.io/grafana/grafana-oss:11.4.0}
+    container_name: oee-grafana
+    restart: unless-stopped
+    depends_on:
+      timescaledb: { condition: service_healthy }
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000/}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/oee_live.json
+      # --- Corporate SSO (prepared, disabled by default; configure via .env) ---
+      GF_AUTH_GENERIC_OAUTH_ENABLED: ${GF_AUTH_GENERIC_OAUTH_ENABLED:-false}
+      GF_AUTH_GENERIC_OAUTH_NAME: ${GF_AUTH_GENERIC_OAUTH_NAME:-Corporate SSO}
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: ${GF_AUTH_GENERIC_OAUTH_CLIENT_ID:-}
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: ${GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET:-}
+      GF_AUTH_GENERIC_OAUTH_SCOPES: ${GF_AUTH_GENERIC_OAUTH_SCOPES:-openid profile email}
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: ${GF_AUTH_GENERIC_OAUTH_AUTH_URL:-}
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: ${GF_AUTH_GENERIC_OAUTH_TOKEN_URL:-}
+      GF_AUTH_GENERIC_OAUTH_API_URL: ${GF_AUTH_GENERIC_OAUTH_API_URL:-}
+      GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: ${GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH:-}
+      GF_AUTH_GENERIC_OAUTH_TLS_CLIENT_CA: ${GF_AUTH_GENERIC_OAUTH_TLS_CLIENT_CA:-}
+      GF_AUTH_PROXY_ENABLED: ${GF_AUTH_PROXY_ENABLED:-false}
+      GF_AUTH_PROXY_HEADER_NAME: ${GF_AUTH_PROXY_HEADER_NAME:-X-WEBAUTH-USER}
+      GF_AUTH_PROXY_HEADER_PROPERTY: ${GF_AUTH_PROXY_HEADER_PROPERTY:-username}
+      GF_AUTH_PROXY_AUTO_SIGN_UP: ${GF_AUTH_PROXY_AUTO_SIGN_UP:-true}
+      GF_AUTH_PROXY_WHITELIST: ${GF_AUTH_PROXY_WHITELIST:-}
+      # --- Datasource credentials (consumed by provisioning) ---
+      OEE_DB_NAME: ${POSTGRES_DB:-oee}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro,z
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro,z
+    ports:
+      - "${GRAFANA_PUBLISH_ADDRESS:-0.0.0.0}:${GRAFANA_PORT:-3000}:3000"
+    networks: [oee_net]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health | grep -q '\"database\": *\"ok\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *default-logging
