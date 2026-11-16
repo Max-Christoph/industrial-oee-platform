@@ -1,0 +1,6 @@
+# Dev overlay for `make dev`: only infrastructure runs in containers, the Python
+# services run locally with hot reload. Exposes the internal MQTT port on loopback.
+services:
+  mosquitto:
+    ports:
+      - "127.0.0.1:${MQTT_DEV_PORT:-1883}:1883"

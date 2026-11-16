@@ -1,5 +1,11 @@
 # industrial-oee-platform - all standard workflows
-# Usage: make help
+# Usage: make help      New here? Run: make doctor
+#
+# House rules (details in CLAUDE.md / AGENTS.md):
+#   * SQL = domain logic, Python = transport. KPIs, percentiles, stop classification live ONLY in
+#     db/mart/*.sql (idempotent CREATE OR REPLACE ...) and are activated with `make apply-sql`.
+#   * Never change core.* destructively; read-only roles get SELECT only.
+#   * Before every commit: `make verify` (lint + tests + compose config).
 
 SHELL       := /usr/bin/env bash
 COMPOSE     ?= podman compose
@@ -12,11 +18,18 @@ POSTGRES_DB ?= oee
 export POSTGRES_DB GRAFANA_PORT API_PORT MCP_PORT
 
 .DEFAULT_GOAL := help
-.PHONY: help preflight env certs setup up down restart ps logs test test-unit test-integration lint \
+.PHONY: help doctor dev preflight env certs setup up down restart ps logs test test-unit test-integration lint verify \
         bench backup restore export-images import-images apply-sql apply-site psql config reset
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+
+# --------------------------------------------------------------------------- onboarding
+doctor: ## Check podman, compose, uv, linger, free ports, .env, certs - prints copy-paste fixes
+	@scripts/doctor.sh
+
+dev: setup ## Dev mode: DB + MQTT in containers, Python services locally with hot reload (SVC=api|ingest|mcp)
+	@scripts/dev.sh
 
 # --------------------------------------------------------------------------- setup
 preflight: ## Check podman, compose and `loginctl enable-linger` (24/7 rootless)
@@ -51,7 +64,7 @@ config: ## Validate and render the compose file
 	$(COMPOSE) config
 
 # --------------------------------------------------------------------------- database
-apply-sql: ## Re-apply idempotent db/mart/*.sql to the running DB (no rebuild, no data loss)
+apply-sql: ## Re-apply idempotent db/mart/*.sql (views, functions, grants) to the running DB - no rebuild, no data loss
 	@scripts/apply_sql.sh
 
 apply-site: ## Re-sync site_overrides (rules, assets, custom views) by restarting ingest_worker
@@ -84,6 +97,9 @@ test-integration: ## Integration tests against a DB: OEE_TEST_DSN=postgresql://p
 
 lint: ## Ruff lint
 	uv run ruff check .
+
+verify: lint test config ## Definition of Done: lint + tests + compose config (run before every commit)
+	@echo "verify: OK"
 
 bench: ## Ingest benchmark 100/250/500 ev/s (BENCH_RATES, BENCH_DURATION) - stack must be up
 	$(COMPOSE) exec -T -e BENCH_RATES=$${BENCH_RATES:-100,250,500} -e BENCH_DURATION=$${BENCH_DURATION:-30} \

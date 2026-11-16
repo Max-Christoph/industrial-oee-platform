@@ -35,7 +35,8 @@ Requirements: Linux host with **rootless Podman ≥ 4.9** + `podman compose` (po
 docker-compose provider), `make`, `openssl`; for tests `uv`.
 
 ```bash
-sudo loginctl enable-linger "$USER"   # once: keep rootless containers running after logout
+make doctor                           # checks podman, compose, uv, linger, ports, .env, certs + prints fixes
+sudo loginctl enable-linger "$USER"   # once (doctor tells you): keep rootless containers running after logout
 make up                               # preflight, .env with random secrets, TLS certs, build + start
 make ps                               # all services should become "healthy"
 ```
@@ -52,7 +53,10 @@ make ps                               # all services should become "healthy"
 
 | Command | What it does |
 |---------|--------------|
+| `make doctor` | host check with copy-paste fixes (start here if anything fails) |
 | `make up` / `make down` | start (build) / stop the stack – volumes are kept |
+| `make dev [SVC=api\|ingest\|mcp]` | DB + MQTT in containers, Python services locally with hot reload |
+| `make verify` | Definition of Done: lint + tests + `compose config` – run before every commit |
 | `make logs [S=ingest_worker]` | follow logs |
 | `make test` | `uv sync` + full pytest suite (integration tests need `OEE_TEST_DSN`) |
 | `make bench` | sustained-ingest benchmark 100/250/500 ev/s: p50/p95/p99 latency, throughput, loss |
@@ -181,13 +185,45 @@ uv run python -m mcp_server --stdio            # local agent (DATABASE_URL=postg
 
 ## Development
 
+**House rules** (binding for humans and AI agents – see [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md)):
+**SQL = domain logic, Python = transport.** Every KPI, percentile or stop classification is SQL in
+`db/mart/`; the Python services only validate, move and serialise data. `core` is never changed
+destructively, read-only roles only ever get `SELECT`, the MCP SQL guard is never relaxed, no plant
+data or secrets outside `site_overrides/` / `.env`, one stack (Python ≥ 3.12 + uv, SQL, rootless Podman).
+
 ```bash
 uv sync --all-packages        # Python ≥ 3.12 workspace (services/*)
-make test                     # unit tests (no infrastructure needed)
+make test                     # unit + guardrail tests (no infrastructure needed)
 OEE_TEST_DSN='postgresql://postgres:<pw>@localhost:5432/postgres?sslmode=require' make test
                               # + integration tests: builds a throw-away DB from db/init + db/mart
-make lint
+make verify                   # lint + tests + compose config = Definition of Done
 ```
+
+### Vibecoding workflow (beginner friendly)
+
+1. `make doctor` – fix whatever it reports (it prints the exact commands).
+2. `make dev` – TimescaleDB + Mosquitto run in containers, `ingest_worker`, `api_gateway`
+   (http://127.0.0.1:8000/docs) and `mcp_server` run locally and **reload automatically** when you
+   save a file. Only one service: `make dev SVC=api`. Ctrl-C stops the local services, `make down`
+   the containers.
+3. Open Claude Code in the repo and use the guided commands – they follow the house rules for you:
+   * **`/add-kpi-view <idea>`** – asks what the KPI means, writes an idempotent view
+     `db/mart/NN_<kpi>.sql`, activates it with `make apply-sql`, adds a read-only `/v1/...` endpoint
+     and the tests.
+   * **`/configure-site`** – interactively creates `site_overrides/assets.csv`, `oee_rules.yaml`
+     and optional `custom_views.sql` (and checks your PLC payloads against the mapping) without
+     touching core code.
+4. `make verify`, then commit.
+
+### Database developer workflow
+
+* Views, functions and procedures live in **idempotent** files `db/mart/NN_name.sql`
+  (`CREATE OR REPLACE …`, executed in name order, `90_grants.sql` last).
+* They are applied automatically on first init **and** any time later with `make apply-sql` –
+  no image rebuild, no restart, no data loss. Running it twice must succeed.
+* `CREATE OR REPLACE VIEW` cannot rename or drop columns: add new columns at the end or create a
+  `_v2` view.
+* Tables (`core.*`, `mart` storage tables) are defined in `db/init/` and only change additively.
 
 Layout:
 
@@ -199,8 +235,10 @@ mosquitto/      broker config, ACL, entrypoint
 grafana/        provisioning + "OEE Live" dashboard
 examples/       demo_plant (default seed)
 site_overrides/ your plant (git-ignored)
-scripts/        env/cert generation, preflight, backup, image export, benchmark
-tests/          unit + integration
+scripts/        env/cert generation, doctor, dev mode, preflight, backup, image export, benchmark
+tests/          unit, guardrail (enforces CLAUDE.md rules) + integration
+.claude/        guided slash commands (/add-kpi-view, /configure-site)
+CLAUDE.md       rules for AI coding agents (AGENTS.md = identical copy)
 ```
 
 ## License

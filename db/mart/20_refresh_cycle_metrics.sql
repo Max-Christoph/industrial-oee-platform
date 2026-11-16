@@ -34,7 +34,7 @@ BEGIN
             asset_id   text        NOT NULL,
             start_time timestamptz NOT NULL
         ) ON COMMIT DROP;
-        TRUNCATE _oee_touched;
+        DELETE FROM _oee_touched;  -- temp table, per-run scratch space
 
         -- 1) Pair START/END events of every event_uid that received new data.
         WITH touched AS (
