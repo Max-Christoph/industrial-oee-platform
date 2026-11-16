@@ -15,8 +15,8 @@ CREATE OR REPLACE PROCEDURE mart.refresh_cycle_metrics(job_id integer DEFAULT 0,
 LANGUAGE plpgsql
 AS $proc$
 DECLARE
-    v_lookback   interval    := coalesce(config ->> 'lookback', '7 days')::interval;
-    v_overlap    interval    := coalesce(config ->> 'overlap', '5 minutes')::interval;
+    v_lookback   interval;
+    v_overlap    interval;
     v_started    timestamptz := clock_timestamp();
     v_snapshot   timestamptz := now();
     v_watermark  timestamptz;
@@ -27,6 +27,10 @@ DECLARE
     v_ctx        text;
 BEGIN
     BEGIN
+        -- parsed inside the protected block so an invalid job config is logged, not raised
+        v_lookback := coalesce(config ->> 'lookback', '7 days')::interval;
+        v_overlap  := coalesce(config ->> 'overlap', '5 minutes')::interval;
+
         SELECT ts_value INTO v_watermark FROM mart.pipeline_state WHERE key = 'pairing_watermark';
         v_watermark := coalesce(v_watermark, '-infinity'::timestamptz);
 

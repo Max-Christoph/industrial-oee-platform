@@ -12,6 +12,14 @@ COMPOSE     ?= podman compose
 ENGINE      ?= podman
 export COMPOSE ENGINE
 
+# Windows dev hosts (Git-Bash + Podman machine / WSL2): keep container paths like /app/... literal
+# (MSYS would rewrite them to C:/...) and find podman even in shells opened before its install.
+# No effect on Linux production hosts.
+ifeq ($(OS),Windows_NT)
+export MSYS_NO_PATHCONV := 1
+export PATH := /c/Program Files/RedHat/Podman:$(PATH)
+endif
+
 # Read a few values (ports, DB name) from .env for messages and exec targets.
 -include .env
 POSTGRES_DB ?= oee

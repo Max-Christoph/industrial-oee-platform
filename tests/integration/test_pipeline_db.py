@@ -97,7 +97,8 @@ def test_pairing_and_cycle_statistics(conn, test_dsn):
     assert med == pytest.approx(14.5)
     assert avg == pytest.approx(sum(durations) / 10)
     assert p25 == pytest.approx(12.25) and p75 == pytest.approx(16.75)
-    assert p95 == pytest.approx(59.5)
+    # percentile_cont: rank 0.95 * (n - 1) = 8.55 -> 18 + 0.55 * (100 - 18) = 63.1
+    assert p95 == pytest.approx(63.1)
     assert rejected == 2
     assert (mc, ms, dc, ds, sc, ss) == (1, 30, 1, 900, 1, 600)
 
@@ -170,6 +171,35 @@ def test_reader_roles_cannot_write(conn, role):
         with pytest.raises(psycopg.errors.Error):
             with conn.transaction():
                 conn.execute("INSERT INTO mart.pipeline_state (key) VALUES ('x')")
+    finally:
+        conn.execute("RESET ROLE")
+
+
+def test_app_role_can_stage_and_insert(conn):
+    """Runs the ingest_worker statements as oee_app (not superuser): TEMP + COPY target + INSERT."""
+    from ingest_worker.writer import MERGE_SQL, STAGING_DDL
+
+    conn.execute("SET ROLE oee_app")
+    try:
+        with conn.transaction():
+            conn.execute(STAGING_DDL)
+            conn.execute(
+                "INSERT INTO staging_events (event_datetime, event_uid, event_state, asset_id, event_category) "
+                "VALUES (%s, 'role-check', 'INSTANT', 'M1', 'INFO')",
+                (BASE,),
+            )
+            assert conn.execute(MERGE_SQL).rowcount == 1
+            conn.execute("INSERT INTO core.error_logs (source, error_type, message) VALUES ('t', 't', 't')")
+    finally:
+        conn.execute("RESET ROLE")
+
+
+@pytest.mark.parametrize("role", ["grafana_reader", "bi_reader", "ai_reader"])
+def test_reader_roles_cannot_create_temp_tables(conn, role):
+    conn.execute(f"SET ROLE {role}")
+    try:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+            conn.execute("CREATE TEMP TABLE t_x (a int)")
     finally:
         conn.execute("RESET ROLE")
 

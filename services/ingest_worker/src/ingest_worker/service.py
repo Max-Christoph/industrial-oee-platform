@@ -83,7 +83,6 @@ class IngestService:
             except psycopg.OperationalError as exc:
                 delay = backoff.next_delay()
                 log.warning("database unavailable (%s) - retry in %.1fs", str(exc).strip(), delay)
-                touch(self.settings.heartbeat_file)
                 await asyncio.sleep(delay)
         return None
 
@@ -95,7 +94,6 @@ class IngestService:
             except (psycopg.OperationalError, psycopg.InterfaceError) as exc:
                 delay = backoff.next_delay()
                 log.error("database write failed (%s) - retrying batch in %.1fs", str(exc).strip(), delay)
-                touch(self.settings.heartbeat_file)
                 await asyncio.sleep(delay)
                 await self.connect_db()
                 continue

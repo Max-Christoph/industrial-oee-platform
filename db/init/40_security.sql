@@ -11,6 +11,8 @@ DECLARE
 BEGIN
     EXECUTE format('REVOKE ALL ON DATABASE %I FROM PUBLIC', v_db);
     EXECUTE format('GRANT CONNECT ON DATABASE %I TO oee_app, grafana_reader, bi_reader, ai_reader', v_db);
+    -- ingest_worker stages COPY batches in a session temp table
+    EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO oee_app', v_db);
 END
 $$;
 

@@ -165,8 +165,20 @@ services, PostgreSQL defaults `shared_buffers=1GB`, `max_wal_size=2GB`, Mosquitt
 the ingest worker – the broker buffers while the worker or the DB is down), reconnect backoff for
 MQTT and DB, batches are retried until stored.
 
-> Podman note: Podman maps `json-file` to its `k8s-file` driver. If your Podman version rejects
-> the `max-file` log option, configure `log_size_max` in `containers.conf` instead.
+> Podman note (verified with Podman 5.8): `max-size: 20m` is applied, `max-file` is accepted but
+> ignored by Podman (Docker honours it). For a hard cap on Podman hosts additionally set
+> `log_size_max` in `containers.conf`, or use `journald` with systemd's own retention.
+
+### Windows development hosts (Podman machine / WSL2)
+
+The stack runs unchanged on Windows with `podman machine` (verified: all 6 services healthy,
+integration tests and benchmark green). Use **Git-Bash**; `make` is optional
+(`winget install -e --id ezwinports.make`), every target is a thin wrapper around `scripts/*.sh`
+and `podman compose …`. `make doctor` detects Windows, checks the Podman machine and prints the
+`winget`/`podman machine` fixes. The Makefile sets `MSYS_NO_PATHCONV=1` on Windows so container
+paths like `/app/scripts/benchmark.py` are not rewritten. The SELinux flags (`:z`, `:ro,z`) are
+harmless there (no SELinux in the WSL VM); `loginctl enable-linger` only matters on Linux
+production hosts. Give the machine ≥ 2 GiB RAM (`PG_SHARED_BUFFERS=1GB` default).
 
 ---
 

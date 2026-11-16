@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import random
 import ssl
@@ -148,6 +149,13 @@ def cleanup(dsn: str, since: datetime) -> None:
         conn.execute("DELETE FROM mart.cycle_histogram WHERE asset_id LIKE 'BENCH-%%'")
 
 
+def _quiet_mqtt_logger() -> logging.Logger:
+    """aiomqtt warns about every pending QoS-1 publish under load - expected for a load generator."""
+    log = logging.getLogger("benchmark.mqtt")
+    log.setLevel(logging.ERROR)
+    return log
+
+
 async def run(args: argparse.Namespace) -> int:
     tls_context = None
     if args.tls:
@@ -163,6 +171,7 @@ async def run(args: argparse.Namespace) -> int:
         username=args.mqtt_username,
         password=args.mqtt_password,
         identifier=f"oee-bench-{uuid.uuid4().hex[:6]}",
+        logger=_quiet_mqtt_logger(),
         tls_context=tls_context,
         max_inflight_messages=1000,
         max_queued_outgoing_messages=100_000,

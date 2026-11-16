@@ -14,14 +14,38 @@ fail() { printf '  %s✘%s %s\n' "$R" "$N" "$1"; [ -n "${2:-}" ] && printf '    
 has()  { command -v "$1" >/dev/null 2>&1; }
 envval() { grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2-; }
 
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) WIN=1 ;; *) WIN=0 ;; esac
+WIN_PODMAN_DIR="/c/Program Files/RedHat/Podman"
+
 pkg_hint() {
-  if has dnf; then echo "sudo dnf install -y $1"
+  if [ "$WIN" = 1 ]; then
+    case "$1" in
+      podman) echo "winget install -e --id RedHat.Podman   # then: podman machine init && podman machine start" ;;
+      podman-compose) echo "winget install -e --id Docker.DockerCompose   # podman compose uses it as provider" ;;
+      make) echo "winget install -e --id ezwinports.make   # or run the scripts/*.sh directly in Git-Bash" ;;
+      *) echo "winget search $1" ;;
+    esac
+  elif has dnf; then echo "sudo dnf install -y $1"
   elif has apt-get; then echo "sudo apt-get update && sudo apt-get install -y $1"
   elif has zypper; then echo "sudo zypper install -y $1"
   else echo "install '$1' with your package manager"; fi
 }
 
 echo "${B}Container runtime${N}"
+if ! has podman && [ "$WIN" = 1 ] && [ -x "$WIN_PODMAN_DIR/podman.exe" ]; then
+  export PATH="$WIN_PODMAN_DIR:$PATH"
+  warn "podman is installed but not on PATH of this shell" "open a new terminal, or: export PATH=\"$WIN_PODMAN_DIR:\$PATH\""
+fi
+if has podman && [ "$WIN" = 1 ]; then
+  machine="$(podman machine list --format '{{.Name}} {{.Running}} {{.Memory}}' 2>/dev/null | head -1)"
+  if [ -z "$machine" ]; then
+    fail "no podman machine (Linux VM) initialised" "podman machine init --cpus 4 --memory 4096 && podman machine start"
+  elif [ "$(echo "$machine" | awk '{print $2}')" != "true" ]; then
+    fail "podman machine '$(echo "$machine" | awk '{print $1}')' is not running" "podman machine start"
+  else
+    ok "podman machine running ($(echo "$machine" | cut -d' ' -f3-))"
+  fi
+fi
 if has podman; then
   ok "podman $(podman --version 2>/dev/null | awk '{print $3}')"
   rootless="$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null || echo unknown)"
@@ -37,7 +61,9 @@ else
 fi
 
 echo "${B}24/7 operation${N}"
-if [ "$(id -u)" -eq 0 ]; then
+if [ "$WIN" = 1 ]; then
+  ok "Windows + podman machine: fine for development/tests (24/7 production: Linux host with enable-linger)"
+elif [ "$(id -u)" -eq 0 ]; then
   warn "running as root - the stack is designed for rootless Podman" "use a dedicated non-root user"
 elif has loginctl; then
   linger="$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || echo unknown)"
